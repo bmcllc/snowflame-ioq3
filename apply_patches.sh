@@ -55,6 +55,9 @@ static void sfz_drop(FILE *f) { int i; for (i = 0; i < 16; i++) if (sfz[i].f == 
   ("    uLong ret;\n    ret = (uLong)fread(", "    uLong ret;\n#ifdef SF100\n    if ((ret = sfz_read_cd((FILE *)stream, buf, size)) != 0) return ret;\n#endif\n    ret = (uLong)fread("),
   ("    int ret;\n    ret = fclose((FILE *)stream);", "    int ret;\n#ifdef SF100\n    sfz_drop((FILE *)stream);\n#endif\n    ret = fclose((FILE *)stream);"),
 ])
+patch(code + "/client/snd_mem.c", [
+  ("	sfxScratchPointer = NULL;\n", "	sfxScratchPointer = NULL;\n	if (!buffer || !sfxScratchBuffer)	// sem isto a lista livre abaixo escreve a partir do endereço 0\n		Com_Error(ERR_FATAL, \"SND_setup: no memory for com_soundMegs %d\", cv->integer);\n"),
+])
 patch(code + "/qcommon/q_shared.h", [
   ('  #define BASEGAME					"foobar"', '  #ifndef BASEGAME\n  #define BASEGAME					"foobar"\n  #endif'),
 ])

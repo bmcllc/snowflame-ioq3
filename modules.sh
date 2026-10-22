@@ -9,7 +9,9 @@ if [ -n "$SF_M68K_CROSS" ]; then export PATH="$SF_M68K_CROSS/usr/bin:$PATH"; exp
 CC=${CC:-m68k-linux-gnu-gcc-14}
 GCCINC=$($CC -print-file-name=include)   # cabeçalhos freestanding do GCC (stddef, stdarg, stdint, float, limits); /usr/include do host fica de fora
 CODE="$IOQ3/code"
-CFLAGS_COMMON=(-mcpu=5475 -O2 -g0 -fno-strict-aliasing -ffreestanding -nostdinc "-isystem$GCCINC" -fno-builtin-printf -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -mno-pcrel
+# -malign-int: int/float/ponteiros alinhados em 4 bytes como no x86 (a ABI do m68k usa 2): os arquivos do Q3 (.aas, ...) e as QVMs
+# têm o layout de structs do x86; sem isto aas_reachability_t teria 42 bytes em vez de 44 e os bots liam lixo
+CFLAGS_COMMON=(-mcpu=5475 -malign-int -O2 -g0 -fno-strict-aliasing -ffreestanding -nostdinc "-isystem$GCCINC" -fno-builtin-printf -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -mno-pcrel
   "-I$RT/include" "-I$IOQ/include" "-I$CODE/qcommon" "-I$CODE/client" "-I$CODE/server" "-I$CODE/renderercommon" "-I$CODE/botlib" "-I$CODE/thirdparty/zlib-1.3.1" "-I$CODE/renderercommon" "-I$CODE/thirdparty/jpeg-9f" "-I$IOQ/sfr"
   -Wno-misleading-indentation -Wno-stringop-overflow -Wno-array-bounds -w
   '-DPRODUCT_VERSION="1.36_sf100"' '-DARCH_STRING="m68k"' -DBOTLIB -DSTANDALONE '-DBASEGAME="baseoa"' -DDEF_COMZONEMEGS=12 -DDEF_COMHUNKMEGS=32 -DMIN_COMHUNKMEGS=20 -DMAX_RAW_STREAMS=3 -DUSE_INTERNAL_ZLIB -DSF100 -DNO_VM_COMPILED)

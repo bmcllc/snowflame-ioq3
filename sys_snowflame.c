@@ -3,6 +3,7 @@
 #include "q_shared.h"
 #include "qcommon.h"
 #include "keys.h"
+int Key_GetCatcher(void);
 #include "snd_local.h"
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +75,42 @@ static void spl_msg(const char *msg) {
   if (n) spl_draw(line, 0xE0E8F0);
 }
 
+/* ------------------------------ configurações no cartão de memória ------------------------------ */
+/* O motor grava as configurações (binds, opções dos menus) em <jogo>/Q3CONFIG_CFG, um arquivo em RAM que some ao desligar. Ele fica
+   no SnowCard: o bloco 0 é do Dashboard; Quake 3 nos blocos 1-4, OpenArena nos 5-8. Formato: 'Q3CF', tamanho, bytes do arquivo. */
+#define MC(o) (*(volatile unsigned *)(0xF00A0000u + (o)))
+#ifdef SF_NATIVE_GAME
+#define CFG_GAME "baseq3"
+#define CFG_SECTOR 8
+#else
+#define CFG_GAME BASEGAME
+#define CFG_SECTOR 40
+#endif
+#define CFG_BYTES (4 * 4096)
+static unsigned cfg_buf[CFG_BYTES / 4], cfg_saved[CFG_BYTES / 4];   /* o controlador do cartão faz o flush/invalidate da D-cache */
+static int mc_cmd(unsigned cmd, unsigned sector, unsigned count, void *addr) {
+  unsigned st;
+  if (!(MC(0x10) & 8)) return -1;                                 /* sem cartão */
+  MC(0x10) = 6; MC(0x04) = sector; MC(0x08) = count; MC(0x0C) = (unsigned)addr; MC(0x00) = cmd;
+  do { st = MC(0x10); if (st & 1) BR(0x0F4) = 100; } while (st & 1);
+  MC(0x10) = 6; return (st & 4) ? -1 : 0;
+}
+static void cfg_load(void) {                                      /* antes do Com_Init: o motor acha o arquivo como se estivesse no disco */
+  FILE *f;
+  if (mc_cmd(1, CFG_SECTOR, CFG_BYTES / 512, cfg_buf) || cfg_buf[0] != 0x51334346u || cfg_buf[1] > CFG_BYTES - 8) return;
+  memcpy(cfg_saved, cfg_buf, CFG_BYTES);
+  if ((f = fopen(CFG_GAME "/" Q3CONFIG_CFG, "wb"))) { fwrite(cfg_buf + 2, 1, cfg_buf[1], f); fclose(f); }
+}
+static void cfg_save(void) {                                      /* grava só se o arquivo mudou desde a última carga/gravação */
+  FILE *f = fopen(CFG_GAME "/" Q3CONFIG_CFG, "rb"); unsigned n, b;
+  if (!f) return;
+  n = (unsigned)fread(cfg_buf + 2, 1, CFG_BYTES - 8, f); fclose(f);
+  cfg_buf[0] = 0x51334346u; cfg_buf[1] = n;
+  if (!memcmp(cfg_buf, cfg_saved, n + 8)) return;
+  for (b = 0; b < CFG_BYTES / 4096; b++) if (mc_cmd(3, CFG_SECTOR + b * 8, 0, 0)) return;
+  if (!mc_cmd(2, CFG_SECTOR, (n + 8 + 511) / 512, cfg_buf)) memcpy(cfg_saved, cfg_buf, n + 8);
+}
+
 /* ------------------------------ sistema ------------------------------ */
 /* Sai do jogo: se o disco tem o menu (boot/menu.bin), pede ao IPL que volte a ele (após 'wait_ms', para a mensagem de erro ficar na
    tela); sem menu (sf100_run, testes) encerra com o código dado. */
@@ -120,7 +157,7 @@ void QDECL Sys_Error(const char *error, ...) {
   if (spl_on) { spl_pct = spl_pct ? spl_pct : 1; spl_draw(msg, 0xFF6060); }
   sf_leave(1, 5000);
 }
-void Sys_Quit(void) { printf("[ioq3] Sys_Quit\n"); sf_leave(0, 0); }
+void Sys_Quit(void) { printf("[ioq3] Sys_Quit\n"); cfg_save(); sf_leave(0, 0); }
 char *Sys_GetClipboardData(void) { return NULL; }
 void Sys_Print(const char *msg) { fputs(msg, stdout); spl_msg(msg); }
 int Sys_Milliseconds(void) { return (int)(sf_time_ns() / 1000000ull); }
@@ -235,7 +272,7 @@ static int hid_char(int u, int shift) {                         /* ASCII (layout
   if (u < 0x04 || u > 0x38) return 0;
   { char c = shift ? hi[u - 4] : lo[u - 4]; return (c == '\r' || c == '\033' || c == '\b' || c == '\t' || c == '`' || c == '~') ? 0 : c; }
 }
-static unsigned pad_prev, mouse_prev;
+static unsigned mouse_prev;
 void IN_Init(void *windowData) { (void)windowData; HID(0x00) = 0; Cvar_Get("in_nograb", "1", CVAR_ARCHIVE); }
 void IN_Shutdown(void) { }
 void IN_Restart(void) { }
@@ -249,10 +286,28 @@ void IN_Frame(void) {
   dx = (int)HID(0x10); dy = (int)HID(0x14); if (dx || dy) Com_QueueEvent(t, SE_MOUSE, dx, dy, 0, NULL);
   b = HID(0x18); ch = b ^ mouse_prev; mouse_prev = b;
   for (i = 0; i < 3; i++) if (ch & (1u << i)) Com_QueueEvent(t, SE_KEY, K_MOUSE1 + (int)i, (b >> i) & 1, 0, NULL);
-  b = PAD(0x10); ch = b ^ pad_prev; pad_prev = b;               /* botões do controle -> K_JOY1.. (direcional também vira setas) */
-  for (i = 0; i < 12; i++) if (ch & (1u << i)) {
-    static const int dirkey[4] = { K_UPARROW, K_DOWNARROW, K_LEFTARROW, K_RIGHTARROW };
-    Com_QueueEvent(t, SE_KEY, i < 4 ? dirkey[i] : K_JOY1 + (int)(i - 4), (b >> i) & 1, 0, NULL);
+  /* controle (porta 0). Menu/console: direcional navega, A/X confirmam, B/Y/START voltam. Jogo: analógicos andam e miram (eixos 0-3 do
+     ioq3: j_side, j_forward, j_yaw, j_pitch) e os botões viram as teclas que o default.cfg do Q3 já usa, então o menu Controles vale
+     para o controle também: A pula (SPACE), B agacha (c), X/Y trocam de arma ([ ]), L/LT zoom (MOUSE3), R/RT atiram (CTRL/MOUSE1),
+     START abre o menu (ESCAPE), SELECT mostra o placar (TAB). O direcional fica fora do jogo: o sf100_play também o aciona pelo analógico. */
+  {
+    /* bits: UP DOWN LEFT RIGHT A B X Y L R START SELECT, e os gatilhos LT RT como 12 e 13 */
+    static const int ui_key[14]   = { K_UPARROW, K_DOWNARROW, K_LEFTARROW, K_RIGHTARROW, K_ENTER, K_ESCAPE, K_ENTER, K_ESCAPE, 0, 0, K_ESCAPE, 0, 0, 0 };
+    static const int game_key[14] = { 0, 0, 0, 0, K_SPACE, 'c', '[', ']', K_MOUSE3, K_CTRL, K_ESCAPE, K_TAB, K_MOUSE3, K_MOUSE1 };
+    static int held[14], axes[4];                                 /* tecla enviada em cada botão: a soltura vai para a mesma tecla */
+    int ui = (Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) != 0, on = PAD(0x1C) & 1;
+    unsigned ax = on ? PAD(0x14) : 0x80808080u, tr = on ? PAD(0x18) : 0;
+    b = PAD(0x10) | (((tr >> 8) & 255) > 128 ? 1u << 12 : 0) | ((tr & 255) > 128 ? 1u << 13 : 0);
+    for (i = 0; i < 14; i++) {
+      int down = (b >> i) & 1, k = ui ? ui_key[i] : game_key[i];
+      if (down && !held[i] && k) { held[i] = k; Com_QueueEvent(t, SE_KEY, k, qtrue, 0, NULL); }
+      else if (!down && held[i]) { Com_QueueEvent(t, SE_KEY, held[i], qfalse, 0, NULL); held[i] = 0; }
+    }
+    for (i = 0; i < 4; i++) {                                     /* lx ly rx ry (bytes 3..0) -> -32768..32512, zona morta de ~15% */
+      int v = (int)((ax >> (24 - 8 * i)) & 255) - 128;
+      v = ui || (v > -20 && v < 20) ? 0 : v * 256;
+      if (v != axes[i]) { axes[i] = v; Com_QueueEvent(t, SE_JOYSTICK_AXIS, (int)i, v, 0, NULL); }
+    }
   }
 }
 
@@ -276,7 +331,7 @@ static void dma_copy_aram(unsigned aram_off, const void *src, unsigned len) {   
   while (d[5] & 1) { }
 }
 qboolean SNDDMA_Init(void) {
-  dma.samplebits = 16; dma.speed = 22050; dma.channels = 2; dma.samples = SND_FRAMES * 2; dma.submission_chunk = 1; dma.isfloat = 0;
+  dma.samplebits = 16; dma.speed = 22050; dma.channels = 2; dma.samples = SND_FRAMES * 2; dma.fullsamples = SND_FRAMES; dma.submission_chunk = 1; dma.isfloat = 0;
   dma.buffer = calloc(SND_FRAMES * 2, 2); snd_mono = calloc(SND_FRAMES, 2);
   if (!dma.buffer || !snd_mono) return qfalse;
   voice_start(0, ARAM_L, 256, 0, (unsigned)((unsigned long long)dma.speed * 65536ull / 48000ull));
@@ -286,11 +341,18 @@ qboolean SNDDMA_Init(void) {
 int SNDDMA_GetDMAPos(void) { unsigned long long fr; if (!snd_up) return 0; fr = (sf_time_ns() - snd_t0) * (unsigned long long)dma.speed / 1000000000ull; return (int)((fr % SND_FRAMES) * 2); }
 void SNDDMA_Shutdown(void) { if (snd_up) { PAULA(0x100 + 0x1C) = 0; PAULA(0x140 + 0x1C) = 0; snd_up = 0; } }
 void SNDDMA_BeginPainting(void) { }
-void SNDDMA_Submit(void) {
+static void submit_frames(int a, int b) {                         /* quadros [a, b) do anel, pares: o DMA quer múltiplos de 4 bytes */
   const short *s = (const short *)dma.buffer; int i;
+  a &= ~1; b = (b + 1) & ~1;
+  for (i = a; i < b; i++) snd_mono[i] = s[i * 2]; dma_copy_aram(ARAM_L + (unsigned)a * 2, snd_mono + a, (unsigned)(b - a) * 2);
+  for (i = a; i < b; i++) snd_mono[i] = s[i * 2 + 1]; dma_copy_aram(ARAM_R + (unsigned)a * 2, snd_mono + a, (unsigned)(b - a) * 2);
+}
+extern int s_soundtime, s_paintedtime;                            /* snd_dma.c: quadro tocando agora e fim do que foi mixado */
+void SNDDMA_Submit(void) {                                        /* a cada update o mixer repinta de s_soundtime + s_mixPreStep em diante: */
+  int from = s_soundtime % SND_FRAMES, n = s_paintedtime - s_soundtime;   /* manda [s_soundtime, s_paintedtime), não o anel inteiro */
   if (!snd_up) return;
-  for (i = 0; i < SND_FRAMES; i++) snd_mono[i] = s[i * 2]; dma_copy_aram(ARAM_L, snd_mono, SND_FRAMES * 2);
-  for (i = 0; i < SND_FRAMES; i++) snd_mono[i] = s[i * 2 + 1]; dma_copy_aram(ARAM_R, snd_mono, SND_FRAMES * 2);
+  if (n <= 0 || n >= SND_FRAMES) { from = 0; n = SND_FRAMES; }
+  if (from + n <= SND_FRAMES) submit_frames(from, from + n); else { submit_frames(from, SND_FRAMES); submit_frames(0, from + n - SND_FRAMES); }
 }
 qboolean S_AL_Init(soundInterface_t *si) { (void)si; return qfalse; }
 
@@ -300,16 +362,18 @@ int main(void) {
   static char cmd[1024];
   /* padrão: o jogo (OpenArena, mapa oa_dm1 do pk3 montado por tools/mkoa.py) em tela cheia sobre o FlameCore, sem bots (não há .aas) */
 #ifdef SF_NATIVE_GAME
-  /* versão nativa: Quake 3 (pk3 originais em baseq3/ no disco), qagame/cgame/ui ligados no motor */
-  const char *dflt = "+set com_basegame baseq3 +set vm_game 0 +set vm_cgame 0 +set vm_ui 0 +set com_hunkMegs 20+set com_zoneMegs 8 +set com_soundMegs 2 +set com_maxfps 60 +set fs_basepath . +set sv_pure 0 +set bot_enable 0 +set s_initsound 0 +devmap q3dm1";
+  /* versão nativa: Quake 3 (pk3 originais em baseq3/ no disco), qagame/cgame/ui ligados no motor; abre o menu principal. Som, bots e
+     o resto vêm do padrão do Q3 ou das configurações salvas no cartão (só o que precisa caber nos 64 MB e o limite de 60 fps é fixo) */
+  const char *dflt = "+set com_basegame baseq3 +set vm_game 0 +set vm_cgame 0 +set vm_ui 0 +set com_hunkMegs 20 +set com_zoneMegs 8 +set com_soundMegs 1 +set com_maxfps 60 +set fs_basepath . +set sv_pure 0";   /* som: 1536 blocos de 2 KB por "mega" (3 MB) */
 #else
   const char *dflt = "+set com_hunkMegs 24 +set com_zoneMegs 8 +set com_soundMegs 2 +set com_maxfps 60 +set fs_basepath . +set sv_pure 0 +set bot_enable 0 +set s_initsound 0 +set model sarge +set headmodel sarge +devmap oa_dm1";
 #endif
   if (SRAM[0x200]) { int i; for (i = 0; i < 1023 && SRAM[0x200 + i]; i++) cmd[i] = SRAM[0x200 + i]; cmd[i] = 0; } else strcpy(cmd, dflt);
   spl_wait_map = strstr(cmd, "map ") != NULL;
   spl_start();
+  cfg_load();
   Com_Init(cmd);
   NET_Init();
-  for (;;) { IN_Frame(); Com_Frame(); }
+  for (;;) { static int last; int t; IN_Frame(); Com_Frame(); if ((t = Sys_Milliseconds()) - last > 2000) { last = t; cfg_save(); } }
   return 0;
 }

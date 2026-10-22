@@ -86,6 +86,19 @@ Para medir: `sf100_run` com `SF_TS=1` (tempo simulado em cada linha do console),
 
 Próximos passos (o gargalo no jogo é a CPU no renderer: transformar e projetar vértices do mundo a cada quadro): transformação/projeção nas VPUs (SnowVector-128, SIMD FP32×4), desenho indexado (`GC_DRAW_INDEXED`: cada vértice escrito uma vez) e costura dos patches (`R_StitchPatches`) se aparecerem frestas.
 
+## Fase 7: menu, som, controle e configuração no cartão
+- **Boot no menu principal** do Q3 (antes: `+devmap q3dm1`). O som está ligado e os bots também (`bot_enable` padrão).
+- **Som:** `com_soundMegs 1` (o `SND_setup` aloca 1536 blocos de ~2 KB por "mega": 4 davam 12 MB e o `malloc` falhava; agora o patch em `snd_mem.c` dá `Com_Error` em vez de escrever sobre o código). `SNDDMA_Init` define `dma.fullsamples`, que o mixer usa para achar a posição no anel. `SNDDMA_Submit` copia para a ARAM só a faixa `[s_soundtime, s_paintedtime)`, que o mixer repinta a cada atualização (a música de fundo usa o mesmo caminho).
+- **Bots:** a botlib lê os `.aas` com structs do x86. O ABI m68k alinha `int` em 2 bytes (por exemplo, `aas_reachability_t` ficava com 42 bytes em vez de 44), por isso `modules.sh` compila com **`-malign-int`**.
+- **Controle** (`IN_Frame`):
+  - O analógico esquerdo move e o direito mira (`SE_JOYSTICK_AXIS`, zona morta ±20; os eixos ficam zerados no menu). Os binds padrão do Q3 para eixos são `j_*`/`in_joystick`.
+  - No menu e no console: direcional = setas, A/START = Enter, B/Y/SELECT = Esc.
+  - No jogo: A = pular (espaço), B = agachar (`c`), X/Y = arma anterior/próxima (`[` `]`), L = `MOUSE3`, R = Ctrl, gatilho direito = atirar (`MOUSE1`), START = Esc (menu), SELECT = Tab (placar).
+  - A tecla solta é a mesma que foi apertada, mesmo que o modo mude no meio.
+- **Configurações do menu persistem:** `q3config.cfg` é guardado no cartão de memória (setores 8-39, depois do bloco 0 do Dashboard), com cabeçalho `Q3CF`+tamanho. É lido antes do `Com_Init` e regravado ao sair e a cada 2 s se mudou (só apaga e programa quando o conteúdo difere). O `sf100_play` grava o cartão em `out/card.bin`.
+- **Sincronização vertical:** nada a fazer. O SF-100 compõe o quadro inteiro no instante do vblank (as camadas de vídeo trocam de endereço ali), então não há tearing. `com_maxfps 60` já trava o jogo em 60 fps (no menu ele chega lá; no jogo fica abaixo).
+- `sf100_run --wav arquivo.wav` grava o áudio da SnowPaula (liga o vídeo, porque a Paula é renderizada a cada vblank).
+
 ## Roteiro
 1. (feito) Runtime freestanding e hello world em ColdFire real.
 2. (feito) libc ampliada e compilação de todos os módulos do ioq3.
