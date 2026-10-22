@@ -88,7 +88,7 @@ Próximos passos (o gargalo no jogo é a CPU no renderer: transformar e projetar
 
 ## Fase 7: menu, som, controle e configuração no cartão
 - **Boot no menu principal** do Q3 (antes: `+devmap q3dm1`). O som está ligado e os bots também (`bot_enable` padrão).
-- **Som:** `com_soundMegs 1` (o `SND_setup` aloca 1536 blocos de ~2 KB por "mega": 4 davam 12 MB e o `malloc` falhava; agora o patch em `snd_mem.c` dá `Com_Error` em vez de escrever sobre o código). `SNDDMA_Init` define `dma.fullsamples`, que o mixer usa para achar a posição no anel. `SNDDMA_Submit` copia para a ARAM só a faixa `[s_soundtime, s_paintedtime)`, que o mixer repinta a cada atualização (a música de fundo usa o mesmo caminho).
+- **Som:** `com_soundMegs 2` (o `SND_setup` aloca 1536 blocos de ~2 KB por "mega": 6 MB; com 3 ou mais o `malloc` falha, e o patch em `snd_mem.c` dá `Com_Error` em vez de escrever sobre o código). `SNDDMA_Init` define `dma.fullsamples`, que o mixer usa para achar a posição no anel. `SNDDMA_Submit` copia para a ARAM só a faixa `[s_soundtime, s_paintedtime)`, que o mixer repinta a cada atualização (a música de fundo usa o mesmo caminho).
 - **Bots:** a botlib lê os `.aas` com structs do x86. O ABI m68k alinha `int` em 2 bytes (por exemplo, `aas_reachability_t` ficava com 42 bytes em vez de 44), por isso `modules.sh` compila com **`-malign-int`**.
 - **Controle** (`IN_Frame`):
   - O analógico esquerdo move e o direito mira (`SE_JOYSTICK_AXIS`, zona morta ±20; os eixos ficam zerados no menu). Os binds padrão do Q3 para eixos são `j_*`/`in_joystick`.
@@ -96,8 +96,21 @@ Próximos passos (o gargalo no jogo é a CPU no renderer: transformar e projetar
   - No jogo: A = pular (espaço), B = agachar (`c`), X/Y = arma anterior/próxima (`[` `]`), L = `MOUSE3`, R = Ctrl, gatilho direito = atirar (`MOUSE1`), START = Esc (menu), SELECT = Tab (placar).
   - A tecla solta é a mesma que foi apertada, mesmo que o modo mude no meio.
 - **Configurações do menu persistem:** `q3config.cfg` é guardado no cartão de memória (setores 8-39, depois do bloco 0 do Dashboard), com cabeçalho `Q3CF`+tamanho. É lido antes do `Com_Init` e regravado ao sair e a cada 2 s se mudou (só apaga e programa quando o conteúdo difere). O `sf100_play` grava o cartão em `out/card.bin`.
-- **Sincronização vertical:** nada a fazer. O SF-100 compõe o quadro inteiro no instante do vblank (as camadas de vídeo trocam de endereço ali), então não há tearing. `com_maxfps 60` já trava o jogo em 60 fps (no menu ele chega lá; no jogo fica abaixo).
+- **Sincronização vertical:** nada a fazer. O SF-100 compõe o quadro inteiro no instante do vblank (as camadas de vídeo trocam de endereço ali), então não há tearing. O jogo vem travado em **30 fps** (`com_maxfps 30`: cada quadro fica 2 vblanks na tela).
 - `sf100_run --wav arquivo.wav` grava o áudio da SnowPaula (liga o vídeo, porque a Paula é renderizada a cada vblank).
+
+### Rumo aos 30 fps travados
+Medido com `timedemo 1; demo four` (q3dm6, 4 jogadores) já com som: **14,1 → 34,1 fps** (30,5 em High), pior quadro 1321 → 139 ms. No jogo (`com_maxfps 30`), o q3dm1 com 2 bots fica em 33,0 ms por quadro em todas as médias do `sfr_speeds`. Com som ligado, o mixer era o maior custo depois do renderer.
+- **Som:** (1) com `com_soundMegs 1` (3 MB) o ioq3 liberava sons para abrir espaço e os recarregava do pk3 no meio da partida (`S_LoadSound`, `inflate`, `crc32`): eram os picos de mais de 1 s. Com 2 (6 MB) isso quase some. (2) `s_mixahead 0.1`: o mixer repinta a cada quadro de `s_soundtime + s_mixPreStep` até `s_soundtime + s_mixahead`; com 0,2 eram 0,15 s de áudio por quadro (4,5 vezes o tempo real a 30 fps), agora 0,05 s. (3) **11 kHz por padrão** (`s_sdlSpeed`, a opção "Low" de SYSTEM > SOUND, como o "Sound Quality: Low" do Q3 original; "Medium" volta a 22 kHz): o ioq3 guarda e mistura os sons já na taxa de saída, então custa metade da CPU e da memória.
+- **LOD dos modelos** (`sfr_model.c`): carrega `nome_1.md3`/`nome_2.md3` e escolhe pelo raio projetado, como o `R_ComputeLOD` do Q3 (`r_lodbias`, `r_lodscale`). +7% no timedemo.
+- **Curvas:** a tolerância da tesselação dos patches é o `r_subdivisions` do Q3, lido ao carregar o mapa.
+- **"Geometric Detail" em Medium por padrão** (`r_lodbias 1`, `r_subdivisions 12`, o preset Medium do próprio menu do Q3; o Q3 vem em High: 0 e 4). Modelos um nível de LOD abaixo (inclusive a arma em primeira pessoa) e curvas mais facetadas, no espírito dos consoles da época; 30,5 → 34 fps no timedemo. Os valores são o padrão dos cvars do renderer, não `+set`, então a escolha feita no menu SETUP > SYSTEM fica salva no cartão. O `rtest` fixa `r_subdivisions 4` para conferir as curvas em High.
+- **HUD:** cada caractere é um quad de `SFR_Draw2D` (~240 por quadro no timedemo), e cada um copiava a vista 3D, montava a 2D e restaurava (dois `memcpy` e `view_derive`). Agora a vista 2D é montada uma vez e refeita só depois de uma cena 3D (`SFR_SetView` reescreve todos os campos que ela muda).
+- **Modelos direto para a câmera:** uma matriz modelo→câmera por entidade (com o 1/64 do MD3) e a luz fixa levada ao espaço do modelo; `SFR_DrawShaderTris` recebe as posições já em câmera (`sfr_cam_space`). Mesma imagem (conferida byte a byte nos quadros do `rtest`).
+- `sfr_speeds 1` imprime a cada 120 quadros: tempo médio do quadro, do GPU (~3,2 ms), vértices e heap livre (~2,2 MB no q3dm1 com um bot).
+- `rtest.expected` atualizado: desde que os shaders 3D passaram a animar pelo tempo da cena (Fase 6) o último quadro do `rtest` mudou e o arquivo tinha ficado para trás; a imagem é a mesma com e sem as mudanças desta fase.
+
+O que ainda pesa no timedemo (perfil): `SFR_DrawShaderTris` 37% (transformar, projetar e escrever vértices do mundo), mixer 12%, `SFR_DrawEntityModel` 9%. O GPU leva ~3,2 ms por quadro e hoje o `EndFrame` espera por ele: sobrepor CPU e GPU exige atrasar a imagem um quadro (não há troca de tela automática no fim da lista).
 
 ## Roteiro
 1. (feito) Runtime freestanding e hello world em ColdFire real.

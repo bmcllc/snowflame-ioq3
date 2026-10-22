@@ -22,13 +22,14 @@ void SFR_BackendInit(void) {
 }
 void SFR_BackendShutdown(void) { }
 
-int sfr_allow_cull, sfr_cull_disable;   /* sfr_cull_disable: só para comparar imagens com e sem descarte */
+int sfr_allow_cull, sfr_cull_disable, sfr_cam_space;   /* sfr_cull_disable: só para comparar imagens com e sem descarte */
 static void view_derive(void) {
   sfr_view.fx = (sfr_view.w * 0.5f) / sfr_view.tx; sfr_view.fy = (sfr_view.h * 0.5f) / sfr_view.ty;
   sfr_view.cx0 = sfr_view.x + sfr_view.w * 0.5f; sfr_view.cy0 = sfr_view.y + sfr_view.h * 0.5f;
 }
+static int view_is_2d;                                              /* SFR_Draw2D montou a vista 2D; SFR_SetView reescreve todos os campos que ela muda */
 void SFR_SetView(const refdef_t *fd) {
-  int i, j; float tx, ty;
+  int i, j; float tx, ty; view_is_2d = 0;
   VectorCopy(fd->vieworg, sfr_view.org);
   for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) sfr_view.axis[i][j] = fd->viewaxis[i][j];
   sfr_view.fovx = fd->fov_x; sfr_view.fovy = fd->fov_y;
@@ -152,7 +153,8 @@ static unsigned char *vcode, *heap_vcode; static float (*vproj)[4], (*heap_vproj
 void SFR_DrawShaderTris(shader_t *sh, int nv, const float (*pos)[3], const float (*st)[2], const float (*lm)[2], const byte (*col)[4], int nidx, const int *idx, sfimg_t *lm_img, const byte ent_rgba[4]) {
   int pass, i, t, used_lm = 0; float time = sfr_2d ? SFR_Time() : sfr_view.time;   /* 2D: relógio (como RB_SetGL2D); 3D: tempo da cena */
   const int cull_on = sfr_allow_cull && !sfr_cull_disable && !sfr_2d && sh->cull != 2;   /* o chamador liga sfr_allow_cull só para esta chamada */
-  sfr_allow_cull = 0;
+  const int cam_space = sfr_cam_space;                                /* 1 = pos já está em espaço de câmera (o chamador liga só para esta chamada) */
+  sfr_allow_cull = 0; sfr_cam_space = 0;
   if (sh->nodraw || sh->sky || nv < 3 || nidx < 3) return;
   if (nv <= SRAM_NV) { scratch = (cam_t *)SFR_SRAM_BUF; vattr = (cv_t *)(scratch + SRAM_NV); vproj = (float (*)[4])(vattr + SRAM_NV); vcode = (unsigned char *)(vproj + SRAM_NV); }
   else {
@@ -163,7 +165,8 @@ void SFR_DrawShaderTris(shader_t *sh, int nv, const float (*pos)[3], const float
     }
     scratch = heap_scratch; vcode = heap_vcode; vproj = heap_vproj; vattr = heap_vattr;
   }
-  for (i = 0; i < nv; i++) {                                         /* mundo -> câmera */
+  if (cam_space) for (i = 0; i < nv; i++) { scratch[i].x = pos[i][0]; scratch[i].y = pos[i][1]; scratch[i].z = pos[i][2]; }
+  else for (i = 0; i < nv; i++) {                                    /* mundo -> câmera */
     float d[3]; VectorSubtract(pos[i], sfr_view.org, d);
     scratch[i].x = -DotProduct(d, sfr_view.axis[1]); scratch[i].y = DotProduct(d, sfr_view.axis[2]); scratch[i].z = DotProduct(d, sfr_view.axis[0]);
   }
@@ -237,11 +240,14 @@ void SFR_DrawShaderTris(shader_t *sh, int nv, const float (*pos)[3], const float
 
 /* quad 2D em coordenadas virtuais 640x480 */
 void SFR_Draw2D(float x, float y, float w, float h, float s1, float t1, float s2, float t2, shader_t *sh, const float *rgba) {
-  static const int idx[6] = { 0, 1, 2, 0, 2, 3 }; float pos[4][3], st[4][2]; byte col[4][4]; int i, saved = sfr_2d; sfview_t sv = sfr_view; float c[4];
+  static const int idx[6] = { 0, 1, 2, 0, 2, 3 }; float pos[4][3], st[4][2]; byte col[4][4]; int i, saved = sfr_2d; float c[4];
   if (rgba) { for (i = 0; i < 4; i++) c[i] = rgba[i]; } else { for (i = 0; i < 4; i++) c[i] = sfr_color2d[i]; }
   /* câmera "ortográfica": vista de 90 graus olhando para +z a z = 1; mapeamos pixels para x,y de câmera nessa distância */
-  sfr_view.fovx = 90.0f; sfr_view.fovy = 90.0f; { static float t90; if (!t90) t90 = tanf(90.0f * (float)M_PI / 360.0f); sfr_view.tx = sfr_view.ty = t90; } sfr_view.x = 0; sfr_view.y = 0; sfr_view.w = SFR_W; sfr_view.h = SFR_H;
-  view_derive(); sfr_view.org[0] = sfr_view.org[1] = sfr_view.org[2] = 0; { int a, b; for (a = 0; a < 3; a++) for (b = 0; b < 3; b++) sfr_view.axis[a][b] = (a == b); }
+  if (!view_is_2d) {                                                 /* ~240 quads por quadro no HUD: monta a vista uma vez, não salva/restaura a 3D a cada um */
+    sfr_view.fovx = 90.0f; sfr_view.fovy = 90.0f; { static float t90; if (!t90) t90 = tanf(90.0f * (float)M_PI / 360.0f); sfr_view.tx = sfr_view.ty = t90; } sfr_view.x = 0; sfr_view.y = 0; sfr_view.w = SFR_W; sfr_view.h = SFR_H;
+    view_derive(); sfr_view.org[0] = sfr_view.org[1] = sfr_view.org[2] = 0; { int a, b; for (a = 0; a < 3; a++) for (b = 0; b < 3; b++) sfr_view.axis[a][b] = (a == b); }
+    view_is_2d = 1;
+  }
   /* axis: forward = X, left = Y, up = Z => câmera x = -Y(left), y = Z(up), z = X(forward) */
   { float X[4] = { x, x + w, x + w, x }, Y[4] = { y, y, y + h, y + h };
     float us[4] = { s1, s2, s2, s1 }, vs[4] = { t1, t1, t2, t2 };
@@ -254,7 +260,7 @@ void SFR_Draw2D(float x, float y, float w, float h, float s1, float t1, float s2
   }
   sfr_2d = 1;
   SFR_DrawShaderTris(sh ? sh : SFR_ShaderByHandle(0), 4, (const float (*)[3])pos, (const float (*)[2])st, NULL, (const byte (*)[4])col, 6, idx, NULL, NULL);
-  sfr_2d = saved; sfr_view = sv;
+  sfr_2d = saved;
 }
 
 /* ---------------- lista de comandos do GPU ---------------- */
@@ -289,6 +295,11 @@ void SFR_EndFrame(void) {
   GPU_REG(0x00) = (unsigned)cmdbuf; GPU_REG(0x04) = cmdn; GPU_REG(0x08) = 1;
   do { st = GPU_REG(0x0C); if (st & 1) BRG_REG(0x0F4) = 100; } while (st & 1);
   if (st & 4) ri.Printf(PRINT_WARNING, "SFR: o GPU rejeitou a lista de comandos\n");
+  { static cvar_t *speeds; static double gpu, verts; static float t0; static int n;   /* sfr_speeds 1: médias a cada 120 quadros (GPU a 200 MHz) */
+    if (!speeds) speeds = ri.Cvar_Get("sfr_speeds", "0", 0);
+    if (speeds->integer) { gpu += GPU_REG(0x34); verts += nverts;
+      if (++n == 120) { extern void sf_malloc_stats(size_t *, size_t *, size_t *); size_t lg, fr, us; float t = SFR_Time(); sf_malloc_stats(&lg, &fr, &us);
+        ri.Printf(PRINT_ALL, "sfr: quadro %.1f ms, GPU %.1f ms, %d vértices, heap livre %d KB\n", (t - t0) * 1000 / n, gpu / n / 200000.0, (int)(verts / n), (int)(fr >> 10)); t0 = t; gpu = verts = 0; n = 0; } } }
   VID_REG(0x40 + 0x00) = rt;                                                    /* exibe este RT; o próximo quadro vai no outro */
   rt_cur ^= 1; sfr_frame_count++;
   (void)have_3d;

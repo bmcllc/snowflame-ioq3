@@ -25,12 +25,13 @@ static void hunk_temp_free(void *p) { ri.Hunk_FreeTempMemory(p); }
 
 /* ---- patches: biquadrático de Bézier 3x3 por sub-patch. Como o r_subdivisions do Q3, cada coluna/linha de sub-patches recebe
    n segmentos pela curvatura: o erro de n cordas de uma quadrática é |P0-2P1+P2|/(4n²), então n = ceil(sqrt(dev/(4*tol))), até SUBDIV.
-   shortcut: sem costura entre patches vizinhos (R_StitchPatches do Q3): podem sobrar frestas de até SUBDIV_TOL unidades; costurar se aparecerem ---- */
+   A tolerância é o r_subdivisions do Q3 ("Geometric Detail": 4 em High, 12 em Medium, 20 em Low), lido ao carregar o mapa.
+   shortcut: sem costura entre patches vizinhos (R_StitchPatches do Q3): podem sobrar frestas de até r_subdivisions unidades; costurar se aparecerem ---- */
 #define SUBDIV 5
-#define SUBDIV_TOL 4.0f
+static float subdiv_tol = 4.0f;
 static void bez3(float t, float *w) { float s = 1 - t; w[0] = s * s; w[1] = 2 * s * t; w[2] = t * t; }
 static float cpv(const drawVert_t *d, int c) { return swap_float(d->xyz[c]); }
-static int segs(float dev) { int n = 1; while (n < SUBDIV && dev > 4 * SUBDIV_TOL * n * n) n++; return n; }
+static int segs(float dev) { int n = 1; while (n < SUBDIV && dev > 4 * subdiv_tol * n * n) n++; return n; }
 static void tessellate(wsurf_t *ws, const drawVert_t *cp, int pw, int ph) {
   int nsx = (pw - 1) / 2, nsy = (ph - 1) / 2, nx = 1, ny = 1, gx, gy, k, c, i, j; float wx[3], wy[3];
   int segx[16], segy[16], gxa[128], gya[128]; float txs[128], tys[128];
@@ -69,6 +70,7 @@ void SFR_FreeWorld(void) { bspdata = NULL; surfs = NULL; nsurfs = 0; sfr_world_l
 void SFR_LoadWorld(const char *name) {
   int i, nshaders_l = 0, nverts_l, nidx_l, nsurf_l, nplanes; dshader_t *dsh; drawVert_t *dv; int *di; dsurface_t *ds; byte *lmdata; int lmlen; long n;
   SFR_FreeWorld();
+  subdiv_tol = r_subdivisions->value; if (subdiv_tol < 1) subdiv_tol = 1;
   n = ri.FS_ReadFile(name, (void **)&bspdata);
   if (n <= 0 || !bspdata) { ri.Error(ERR_DROP, "SFR_LoadWorld: não achei %s", name); return; }
   bsp = (dheader_t *)bspdata;

@@ -18,6 +18,7 @@
 extern refimport_t ri;
 #define SFR_HUNK(n) ri.Hunk_AllocDebug((n), h_low, "sfr", __FILE__, __LINE__)
 extern glconfig_t sfr_glconfig;
+extern cvar_t *r_lodbias, *r_lodscale, *r_subdivisions;
 
 /* ---- ABI do GPU (espelha src/abi.h) ---- */
 #define GPU_REG(o) (*(volatile unsigned *)(0xF0030000u + (o)))
@@ -74,7 +75,7 @@ void SFR_BackendInit(void); void SFR_BackendShutdown(void);
 void SFR_BeginFrame(void); void SFR_EndFrame(void);
 typedef struct { float org[3], axis[3][3]; float fovx, fovy; int x, y, w, h; float znear, zfar; float tx, ty; /* tan(fov/2), calculado uma vez por vista */ float depthk; /* zfar / (zfar - znear) */ float fx, fy, cx0, cy0; /* projeção: pixels por unidade e centro */ float time; /* refdef.time em s: anima os shaders 3D, como no Q3 */ } sfview_t;
 extern sfview_t sfr_view;
-extern int sfr_allow_cull;   /* 1 enquanto o chamador desenha mundo/modelos (descarte de faces de costas pelo shader->cull) */
+extern int sfr_allow_cull, sfr_cam_space;   /* 1 enquanto o chamador desenha mundo/modelos (descarte de faces de costas pelo shader->cull) */
 extern int sfr_2d;                                   /* 1 = desenho 2D (sem profundidade) */
 void SFR_SetView(const refdef_t *fd);
 /* emite um triângulo em espaço de câmera (recorta, projeta, acumula) */

@@ -331,7 +331,8 @@ static void dma_copy_aram(unsigned aram_off, const void *src, unsigned len) {   
   while (d[5] & 1) { }
 }
 qboolean SNDDMA_Init(void) {
-  dma.samplebits = 16; dma.speed = 22050; dma.channels = 2; dma.samples = SND_FRAMES * 2; dma.fullsamples = SND_FRAMES; dma.submission_chunk = 1; dma.isfloat = 0;
+  int khz = Cvar_Get("s_sdlSpeed", "11025", CVAR_ARCHIVE)->integer;   /* o menu SYSTEM > SOUND grava a qualidade aqui (Low 11025, Medium 22050; High vira Medium: 44 kHz não cabe na RAM) */
+  dma.samplebits = 16; dma.speed = khz > 0 && khz <= 11025 ? 11025 : 22050; dma.channels = 2; dma.samples = SND_FRAMES * 2; dma.fullsamples = SND_FRAMES; dma.submission_chunk = 1; dma.isfloat = 0;
   dma.buffer = calloc(SND_FRAMES * 2, 2); snd_mono = calloc(SND_FRAMES, 2);
   if (!dma.buffer || !snd_mono) return qfalse;
   voice_start(0, ARAM_L, 256, 0, (unsigned)((unsigned long long)dma.speed * 65536ull / 48000ull));
@@ -364,7 +365,7 @@ int main(void) {
 #ifdef SF_NATIVE_GAME
   /* versão nativa: Quake 3 (pk3 originais em baseq3/ no disco), qagame/cgame/ui ligados no motor; abre o menu principal. Som, bots e
      o resto vêm do padrão do Q3 ou das configurações salvas no cartão (só o que precisa caber nos 64 MB e o limite de 60 fps é fixo) */
-  const char *dflt = "+set com_basegame baseq3 +set vm_game 0 +set vm_cgame 0 +set vm_ui 0 +set com_hunkMegs 20 +set com_zoneMegs 8 +set com_soundMegs 1 +set com_maxfps 60 +set fs_basepath . +set sv_pure 0";   /* som: 1536 blocos de 2 KB por "mega" (3 MB) */
+  const char *dflt = "+set com_basegame baseq3 +set vm_game 0 +set vm_cgame 0 +set vm_ui 0 +set com_hunkMegs 20 +set com_zoneMegs 8 +set com_soundMegs 2 +set s_mixahead 0.1 +set com_maxfps 30 +set fs_basepath . +set sv_pure 0";   /* som: 1536 blocos de 2 KB por "mega" (6 MB; 3 não cabe); mixahead 0.1: o mixer repinta ~0,05 s por quadro, não 0,15 s */
 #else
   const char *dflt = "+set com_hunkMegs 24 +set com_zoneMegs 8 +set com_soundMegs 2 +set com_maxfps 60 +set fs_basepath . +set sv_pure 0 +set bot_enable 0 +set s_initsound 0 +set model sarge +set headmodel sarge +devmap oa_dm1";
 #endif

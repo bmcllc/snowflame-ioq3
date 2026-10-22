@@ -79,6 +79,7 @@ int main(void) {
   imp.FS_FileIsInPAK = im_in_pak; imp.FS_ReadFile = im_readfile; imp.FS_FreeFile = im_freefile; imp.FS_ListFiles = im_listfiles; imp.FS_FreeFileList = im_freelist; imp.FS_WriteFile = im_writefile; imp.FS_FileExists = im_exists;
   imp.CIN_UploadCinematic = im_cin_up; imp.CIN_PlayCinematic = im_cin_play; imp.CIN_RunCinematic = im_cin_run; imp.CL_WriteAVIVideoFrame = im_avi;
   imp.IN_Init = im_in_init; imp.IN_Shutdown = im_in_shut; imp.IN_Restart = im_in_rst; imp.ftol = im_ftol; imp.Sys_SetEnv = im_setenv; imp.Sys_GLimpSafeInit = im_glsafe; imp.Sys_GLimpInit = im_glsafe; imp.Sys_LowPhysicalMemory = im_lowmem;
+  im_cvar_set("r_subdivisions", "4");                               /* o rtest confere as curvas no detalhe máximo (High), não no padrão do console */
   re = GetRefAPI(REF_API_VERSION, &imp); if (!re) { printf("GetRefAPI falhou\n"); return 1; }
   re->BeginRegistration(&cfg); printf("[rtest] %s %dx%d\n", cfg.renderer_string, cfg.vidWidth, cfg.vidHeight);
 #ifdef RT_NOCULL

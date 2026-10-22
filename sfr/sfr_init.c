@@ -2,7 +2,7 @@
 #include "sfr_local.h"
 
 refimport_t ri; glconfig_t sfr_glconfig; glconfig_t glConfig;
-cvar_t *r_saveFontData;
+cvar_t *r_saveFontData, *r_lodbias, *r_lodscale, *r_subdivisions;
 static refexport_t re; static int inited;
 void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font);
 void R_IssuePendingRenderCommands(void) { }
@@ -19,6 +19,8 @@ static void sf_init(void) {
 static void Shutdown(qboolean d) { (void)d; SFR_FreeWorld(); SFR_ModelsShutdown(); SFR_ShaderShutdown(); SFR_ImageShutdown(); SFR_BackendShutdown(); inited = 0; }
 static void BeginRegistration(glconfig_t *c) {
   sf_init();
+  /* "Geometric Detail" do menu: o console vem em Medium (o Q3 vem em High: 0 e 4); High volta pelo menu SETUP > SYSTEM */
+  r_lodbias = ri.Cvar_Get("r_lodbias", "1", CVAR_ARCHIVE); r_lodscale = ri.Cvar_Get("r_lodscale", "5", CVAR_CHEAT); r_subdivisions = ri.Cvar_Get("r_subdivisions", "12", CVAR_ARCHIVE | CVAR_LATCH);
   memset(&sfr_glconfig, 0, sizeof sfr_glconfig);
   Q_strncpyz(sfr_glconfig.renderer_string, "SnowFlame FlameCore", sizeof sfr_glconfig.renderer_string); Q_strncpyz(sfr_glconfig.vendor_string, "Amiga", sizeof sfr_glconfig.vendor_string); Q_strncpyz(sfr_glconfig.version_string, "SF-100", sizeof sfr_glconfig.version_string);
   sfr_glconfig.vidWidth = SFR_W; sfr_glconfig.vidHeight = SFR_H; sfr_glconfig.windowAspect = (float)SFR_W / SFR_H; sfr_glconfig.colorBits = 32; sfr_glconfig.depthBits = 24; sfr_glconfig.stencilBits = 8;

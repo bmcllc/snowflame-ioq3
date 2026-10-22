@@ -4,7 +4,7 @@
 #define MAX_MODELS 512
 #define BMODEL_BASE 100000
 typedef struct { char name[MAX_QPATH]; int nverts, ntris, nshaders; int *tris; float *st; short *xyz; shader_t *shader; } sfmsurf_t;
-typedef struct { char name[MAX_QPATH]; int nframes, ntags, nsurfs; md3Frame_t *frames; md3Tag_t *tags; sfmsurf_t *surfs; } sfmodel_t;
+typedef struct { char name[MAX_QPATH]; int nframes, ntags, nsurfs; md3Frame_t *frames; md3Tag_t *tags; sfmsurf_t *surfs; int nlods, lod[3]; /* índices em models[] de nome_1.md3, nome_2.md3 */ } sfmodel_t;
 static sfmodel_t models[MAX_MODELS]; static int nmodels;
 typedef struct { char name[MAX_QPATH]; int n; char surf[16][MAX_QPATH]; shader_t *sh[16]; } sfskin_t;
 static sfskin_t skins[128]; static int nskins;
@@ -72,7 +72,15 @@ qhandle_t SFR_RegisterModel(const char *name) {
   if (nmodels >= MAX_MODELS) return 0;
   m = &models[nmodels]; memset(m, 0, sizeof *m);
   if (!load_md3(m, name)) { ri.Printf(PRINT_DEVELOPER, "SFR: modelo %s não carregou\n", name); return 0; }
-  return ++nmodels;
+  m->lod[0] = nmodels++; m->nlods = 1;
+  { int len = (int)strlen(name); char ln[MAX_QPATH];                  /* LODs como no RE_RegisterModel do Q3: nome_1.md3, nome_2.md3 */
+    while (len > 4 && !Q_stricmp(name + len - 4, ".md3") && m->nlods < 3 && nmodels < MAX_MODELS) {
+      Com_sprintf(ln, sizeof ln, "%.*s_%d.md3", len - 4, name, m->nlods);
+      memset(&models[nmodels], 0, sizeof models[nmodels]);
+      if (!load_md3(&models[nmodels], ln) || models[nmodels].nframes != m->nframes) break;
+      m->lod[m->nlods++] = nmodels++;
+    } }
+  return m->lod[0] + 1;
 }
 
 int SFR_LerpTag(orientation_t *tag, qhandle_t mh, int sf, int ef, float frac, const char *tagName) {
@@ -98,7 +106,7 @@ static void decode_normal(short enc, float n[3]) {
 }
 
 void SFR_DrawEntityModel(const refEntity_t *e) {
-  sfmodel_t *m; int s, i; int fr = e->frame, ofr = e->oldframe; float bl = e->backlerp;
+  sfmodel_t *m; int s, i; int fr = e->frame, ofr = e->oldframe; float bl = e->backlerp, lmod[3], cm[3][3], ct[3];
   if (e->hModel >= BMODEL_BASE) { float axis[3][3]; int a, c; for (a = 0; a < 3; a++) for (c = 0; c < 3; c++) axis[a][c] = e->axis[a][c]; SFR_RenderBModel(e->hModel - BMODEL_BASE, e->origin, (const float (*)[3])axis); return; }
   if (e->hModel <= 0 || e->hModel > nmodels) return;
   m = &models[e->hModel - 1];
@@ -108,7 +116,20 @@ void SFR_DrawEntityModel(const refEntity_t *e) {
     for (k = 0; k < 3; k++) c[k] = e->origin[k] + lc[0] * e->axis[0][k] + lc[1] * e->axis[1][k] + lc[2] * e->axis[2][k];
     r = (f0->radius > f1->radius ? f0->radius : f1->radius) + Distance(f0->localOrigin, f1->localOrigin);
     if (e->nonNormalizedAxes) for (k = 0; k < 3; k++) { float l = VectorLength(e->axis[k]); if (l > sc) sc = l; }
-    if (SFR_CullSphere(c, r * sc)) return; }
+    if (SFR_CullSphere(c, r * sc)) return;
+    if (m->nlods > 1) {                                               /* R_ComputeLOD do Q3: raio projetado da caixa do quadro */
+      float d = 0, pr = 0, fl; int lod;
+      for (k = 0; k < 3; k++) d += (e->origin[k] - sfr_view.org[k]) * sfr_view.axis[0][k];
+      if (d > 0) { pr = RadiusFromBounds(f0->bounds[0], f0->bounds[1]) / (sfr_view.ty * d); if (pr > 1) pr = 1; }
+      fl = d > 0 ? (1.0f - pr * (r_lodscale->value > 20 ? 20 : r_lodscale->value)) * m->nlods : 0;
+      lod = (int)fl; if (lod < 0) lod = 0; if (lod >= m->nlods) lod = m->nlods - 1;
+      lod += r_lodbias->integer; if (lod < 0) lod = 0; if (lod >= m->nlods) lod = m->nlods - 1;
+      m = &models[m->lod[lod]];
+    } }
+  { const float *row[3] = { sfr_view.axis[1], sfr_view.axis[2], sfr_view.axis[0] }, sg[3] = { -1, 1, 1 }; float d[3]; int r, k;   /* modelo -> câmera numa matriz só (câmera: x = -esquerda, y = cima, z = frente) */
+    VectorSubtract(e->origin, sfr_view.org, d);
+    for (r = 0; r < 3; r++) { ct[r] = sg[r] * DotProduct(d, row[r]); for (k = 0; k < 3; k++) cm[r][k] = sg[r] * DotProduct(e->axis[k], row[r]) * (1.0f / 64); } }   /* 1/64: escala dos xyz do MD3 */
+  { int k; for (k = 0; k < 3; k++) lmod[k] = e->axis[k][0] * 0.3f + e->axis[k][1] * 0.3f + e->axis[k][2] * 0.9f; }   /* luz fixa (0.3, 0.3, 0.9) no espaço do modelo: n·lmod = (axis·n)·L sem girar cada normal */
   for (s = 0; s < m->nsurfs; s++) {
     sfmsurf_t *su = &m->surfs[s]; shader_t *sh = su->shader; float (*pos)[3]; byte (*col)[4]; int nv = su->nverts;
     if (e->customShader) sh = SFR_ShaderByHandle(e->customShader);
@@ -116,16 +137,15 @@ void SFR_DrawEntityModel(const refEntity_t *e) {
     if (!sh) continue;
     pos = ri.Hunk_AllocateTempMemory(nv * 12); col = ri.Hunk_AllocateTempMemory(nv * 4);
     for (i = 0; i < nv; i++) {
-      short *a = &su->xyz[(fr * nv + i) * 4], *b = &su->xyz[(ofr * nv + i) * 4]; float p[3], n[3], l, w = 1.0f / 64; int c;
-      if (bl == 0) for (c = 0; c < 3; c++) p[c] = a[c] * w;           /* sem interpolação: a*1 + b*0 dá o mesmo resultado */
-      else for (c = 0; c < 3; c++) p[c] = (a[c] * (1 - bl) + b[c] * bl) * w;
-      for (c = 0; c < 3; c++) pos[i][c] = e->origin[c] + p[0] * e->axis[0][c] + p[1] * e->axis[1][c] + p[2] * e->axis[2][c];
+      short *a = &su->xyz[(fr * nv + i) * 4], *b = &su->xyz[(ofr * nv + i) * 4]; float p[3], n[3], l; int c;
+      if (bl == 0) for (c = 0; c < 3; c++) p[c] = a[c];               /* sem interpolação: a*1 + b*0 dá o mesmo resultado */
+      else for (c = 0; c < 3; c++) p[c] = a[c] * (1 - bl) + b[c] * bl;
+      for (c = 0; c < 3; c++) pos[i][c] = ct[c] + p[0] * cm[c][0] + p[1] * cm[c][1] + p[2] * cm[c][2];
       decode_normal(a[3], n);
-      { float wn[3]; for (c = 0; c < 3; c++) wn[c] = n[0] * e->axis[0][c] + n[1] * e->axis[1][c] + n[2] * e->axis[2][c];
-        l = 0.55f + 0.45f * (wn[0] * 0.3f + wn[1] * 0.3f + wn[2] * 0.9f); if (l < 0.35f) l = 0.35f; if (l > 1) l = 1; }
+      l = 0.55f + 0.45f * (n[0] * lmod[0] + n[1] * lmod[1] + n[2] * lmod[2]); if (l < 0.35f) l = 0.35f; if (l > 1) l = 1;
       col[i][0] = col[i][1] = col[i][2] = (byte)(l * 255); col[i][3] = e->shaderRGBA[3] ? e->shaderRGBA[3] : 255;
     }
-    sfr_allow_cull = 1; SFR_DrawShaderTris(sh, nv, (const float (*)[3])pos, (const float (*)[2])su->st, NULL, (const byte (*)[4])col, su->ntris * 3, su->tris, NULL, e->shaderRGBA);
+    sfr_allow_cull = 1; sfr_cam_space = 1; SFR_DrawShaderTris(sh, nv, (const float (*)[3])pos, (const float (*)[2])su->st, NULL, (const byte (*)[4])col, su->ntris * 3, su->tris, NULL, e->shaderRGBA);
     ri.Hunk_FreeTempMemory(col); ri.Hunk_FreeTempMemory(pos);
   }
 }
