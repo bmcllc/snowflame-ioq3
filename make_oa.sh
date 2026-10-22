@@ -3,7 +3,7 @@
 # Padrão: out/oa. Variáveis: SF_M68K_CROSS (toolchain, padrão ~/.local/opt/m68k-cross se não houver m68k-linux-gnu-gcc-14 no PATH),
 # OA_BASE (pasta baseoa do OpenArena 0.8.8), OA_PLAYERS (personagens, padrão sarge,grism). Depois: make dvd-oa / make play-oa.
 set -e
-HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$HERE
 OUT=${1:-$ROOT/out/oa}; mkdir -p "$OUT"
 unset CC CXX                                                   # o ambiente pode apontar CC/CXX para um compilador do host
 OA_BASE=${OA_BASE:-"$ROOT/../Games-To-Port/openarena/x/openarena-0.8.8/baseoa"}

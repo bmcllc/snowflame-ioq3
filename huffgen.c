@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     ob = 0; Huff_offsetReceive(back.tree, &j, b, &ob, 512); if (j != i) { fprintf(stderr, "huffgen: decodificação diverge no símbolo %d\n", i); return 1; }
   }
   if (!(f = fopen(argv[1], "w"))) { perror(argv[1]); return 1; }
-  fprintf(f, "/* sf_huff.h - GERADO por port/ioq3/huffgen.c: árvore inicial de Huffman do Q3 (MSG_initHuffman) como índices. Não edite. */\n");
+  fprintf(f, "/* sf_huff.h - GERADO por huffgen.c (snowflame-ioq3): árvore inicial de Huffman do Q3 (MSG_initHuffman) como índices. Não edite. */\n");
   fprintf(f, "static const int sf_huff_tab[%d] = {", nt);
   for (i = 0; i < nt; i++) fprintf(f, i == 0 ? "\n%d" : i % 24 ? ",%d" : ",\n%d", tab[i]);
   fprintf(f, "\n};\nstatic void *sf_huff_dec(huff_t *h, int v) { return v < 0 ? NULL : v < 1000 ? (void *)&h->nodeList[v] : (void *)&h->nodePtrs[v - 1000]; }\n");

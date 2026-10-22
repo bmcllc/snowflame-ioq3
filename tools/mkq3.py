@@ -18,7 +18,7 @@ order, seen = [], set()
 for lg in logs:
     for ln in open(lg, encoding="latin1"):
         m = re.search(r"FS_FOpenFileRead: (\S+) \(found in", ln)
-        n = (m.group(1) if m else ln.strip()).lower()   # linha de log do motor ou um nome por linha (port/ioq3/q3order.txt)
+        n = (m.group(1) if m else ln.strip()).lower()   # linha de log do motor ou um nome por linha (q3order.txt)
         if n in src and n not in seen: seen.add(n); order.append(n)
 names = order + sorted(n for n in src if n not in seen)
 
